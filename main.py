@@ -18,13 +18,12 @@ load_dotenv()
 
 # Конфигурация
 TOKEN = os.getenv("BOT_TOKEN")
-OWNER_IDS = list(map(int, os.getenv("OWNER_IDS", "").split(","))) if os.getenv("OWNER_IDS") else []
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 BOT_USERNAME = "@Tester894bot"
 USER_DATA_FILE = "user_data.json"
 
 # Состояния для ConversationHandler
-GET_NAME, BROADCAST_MESSAGE = range(2)
+GET_NAME = 0
 
 # Настройка логирования
 logging.basicConfig(
@@ -46,21 +45,6 @@ def save_user_data(data):
         json.dump(data, f, indent=2)
 
 user_data = load_user_data()
-
-async def is_owner(user_id: int) -> bool:
-    """Проверка прав с логированием"""
-    result = user_id in OWNER_IDS
-    logger.info(f"Проверка прав для {user_id}: {'Доступ разрешен' if result else 'Доступ запрещен'}")
-    return result
-
-async def debug_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда для отладки"""
-    user_id = update.effective_user.id
-    await update.message.reply_text(
-        f"🔍 Ваш ID: {user_id}\n"
-        f"OWNER_IDS: {OWNER_IDS}\n"
-        f"Вы учитель: {'✅' if await is_owner(user_id) else '❌'}"
-    )
 
 # Обработка имени пользователя
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -91,74 +75,6 @@ async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ Спасибо, {full_name}! Теперь вы можете использовать все функции бота.\n"
         "Напишите /help для списка команд."
     )
-    return ConversationHandler.END
-
-async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Новая версия команды /broadcast"""
-    user_id = update.effective_user.id
-    if not await is_owner(user_id):
-        await update.message.reply_text(f"⛔ Доступ запрещен! Ваш ID: {user_id}")
-        return
-    
-    logger.info(f"Учитель {user_id} начал рассылку")
-    await update.message.reply_text(
-        "📢 Введите сообщение для рассылки (текст или фото):\n"
-        "Для отмены используйте /cancel"
-    )
-    return BROADCAST_MESSAGE
-
-async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Улучшенная рассылка"""
-    if not user_data:
-        await update.message.reply_text("❌ Нет пользователей для рассылки")
-        return ConversationHandler.END
-
-    status_msg = await update.message.reply_text("🔄 Начинаю рассылку...")
-    successful = 0
-    failed = []
-
-    try:
-        if update.message.text:
-            for user_id_str, user_info in user_data.items():
-                try:
-                    await context.bot.send_message(
-                        chat_id=int(user_id_str),
-                        text=f"📢 Рассылка от учителя:\n\n{update.message.text}"
-                    )
-                    successful += 1
-                except Exception as e:
-                    failed.append(user_id_str)
-                    logger.warning(f"Ошибка отправки для {user_id_str}: {e}")
-
-        elif update.message.photo:
-            photo = update.message.photo[-1].file_id
-            caption = update.message.caption or ""
-            for user_id_str, user_info in user_data.items():
-                try:
-                    await context.bot.send_photo(
-                        chat_id=int(user_id_str),
-                        photo=photo,
-                        caption=f"📢 {caption}" if caption else "📢 Сообщение от учителя"
-                    )
-                    successful += 1
-                except Exception as e:
-                    failed.append(user_id_str)
-                    logger.warning(f"Ошибка отправки фото для {user_id_str}: {e}")
-
-        report = [
-            f"📊 Результат:",
-            f"• Отправлено: {successful}",
-            f"• Ошибок: {len(failed)}"
-        ]
-        if failed:
-            report.append(f"❌ Не удалось: {', '.join(failed[:5])}{'...' if len(failed) > 5 else ''}")
-        
-        await status_msg.edit_text("\n".join(report))
-
-    except Exception as e:
-        logger.error(f"КРИТИЧЕСКАЯ ОШИБКА: {e}")
-        await status_msg.edit_text("⚠️ Рассылка прервана из-за ошибки")
-
     return ConversationHandler.END
 
 # ИИ-команды
@@ -266,30 +182,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/search <текст> - Поиск информации\n"
     )
     
-    if await is_owner(update.effective_user.id):
-        help_text += (
-            "\n👨‍🏫 Команды для учителя:\n"
-            "/broadcast - Рассылка сообщений\n"
-            "/list - Список учеников"
-        )
-    
     await update.message.reply_text(help_text)
-
-async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_owner(update.effective_user.id):
-        await update.message.reply_text("⛔ Доступ запрещен")
-        return
-    
-    if not user_data:
-        await update.message.reply_text("📋 Список пользователей пуст")
-        return
-    
-    user_list = "\n".join(
-        f"@{data['username']} - {data['full_name']} (ID: {user_id})"
-        for user_id, data in user_data.items()
-    )
-    
-    await update.message.reply_text(f"📋 Список пользователей:\n\n{user_list}")
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Текущее действие отменено")
@@ -301,10 +194,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Произошла внутренняя ошибка")
 
 async def ask_ai(prompt: str) -> str:
-    """Улучшенная функция запроса к ИИ"""
-    if not await check_api_available():
-        return None
-
+    """Функция запроса к ИИ"""
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "HTTP-Referer": f"https://t.me/{BOT_USERNAME[1:]}",
@@ -338,50 +228,28 @@ async def ask_ai(prompt: str) -> str:
         logger.error(f"AI request failed: {str(e)}", exc_info=True)
         return None
 
-async def check_api_available():
-    """Проверяет доступность OpenRouter API"""
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                "https://openrouter.ai/api/v1/models",
-                headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"},
-                timeout=10
-            ) as resp:
-                return resp.status == 200
-    except:
-        return False
-
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
-    # Сначала регистрируем обычные команды
-    app.add_handler(CommandHandler("debug_id", debug_id))
-    app.add_handler(CommandHandler("broadcast", broadcast_command))
-    
-    # Затем ConversationHandler
+    # Обработчик регистрации
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
             GET_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
-            BROADCAST_MESSAGE: [
-                MessageHandler(filters.TEXT | filters.PHOTO, broadcast_message),
-                CommandHandler("cancel", cancel)
-            ],
         },
         fallbacks=[CommandHandler("cancel", cancel)]
     )
-    app.add_handler(conv_handler)
 
-    # ИИ-команды
+    # Регистрация обработчиков команд
+    app.add_handler(conv_handler)
+    app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("theorem", theorem_command))
     app.add_handler(CommandHandler("formula", formula_command))
     app.add_handler(CommandHandler("task", task_command))
     app.add_handler(CommandHandler("search", search_command))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("list", list_command))
 
     app.add_error_handler(error_handler)
-    logger.info("Бот запущен с исправленной рассылкой")
+    logger.info("Бот запущен (без функции рассылки)")
     app.run_polling()
 
 if __name__ == "__main__":

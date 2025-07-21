@@ -76,7 +76,7 @@ async def ask_ai(prompt: str) -> str:
     }
     
     payload = {
-        "model": "meta-llama/llama-3-70b-instruct",  # Более мощная модель
+        "model": "meta-llama/llama-3-70b-instruct",
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.7,
         "max_tokens": 1000
@@ -162,6 +162,25 @@ async def theorem_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Попробуйте позже или упростите запрос."
         )
 
+async def formula_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("ℹ️ Пример: /formula Квадратное уравнение")
+        return
+    
+    query = " ".join(context.args)
+    await update.message.reply_chat_action(action="typing")
+    
+    prompt = (
+        f"Объясни формулу '{query}' на русском языке:\n"
+        f"- Математическая запись\n- Пояснение элементов\n- Примеры использования\n- Типичные задачи"
+    )
+    
+    response = await ask_ai(prompt)
+    if response:
+        await update.message.reply_text(f"🧮 Формула {query}:\n\n{response}")
+    else:
+        await update.message.reply_text("⚠️ Не удалось получить ответ. Попробуйте позже.")
+
 async def task_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("ℹ️ Пример: /task Найти площадь круга радиусом 5 см")
@@ -190,7 +209,23 @@ async def task_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Попробуйте переформулировать запрос или обратиться позже."
         )
 
-# Остальные функции (formula_command, search_command и т.д.) остаются без изменений
+async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.photo:
+        await update.message.reply_text("🔍 Анализирую изображение...")
+        await update.message.reply_text("⚠️ Поиск по изображениям временно недоступен")
+    elif context.args:
+        query = " ".join(context.args)
+        await update.message.reply_chat_action(action="typing")
+        
+        prompt = f"Найди информацию по запросу: '{query}'. Дай краткий и точный ответ на русском языке."
+        
+        response = await ask_ai(prompt)
+        if response:
+            await update.message.reply_text(f"🔎 Результаты по запросу '{query}':\n\n{response}")
+        else:
+            await update.message.reply_text("⚠️ Не удалось выполнить поиск. Попробуйте позже.")
+    else:
+        await update.message.reply_text("ℹ️ Отправьте текст или фото для поиска")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
@@ -233,7 +268,6 @@ async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         if update.message.text:
-            # Текстовая рассылка
             for user_id in user_data:
                 try:
                     await context.bot.send_message(
@@ -246,7 +280,6 @@ async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     logger.error(f"Failed to send to {user_id}: {e}")
         
         elif update.message.photo:
-            # Рассылка фото
             photo = update.message.photo[-1].file_id
             caption = update.message.caption or ""
             
@@ -262,10 +295,9 @@ async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     failed.append(user_id)
                     logger.error(f"Failed to send photo to {user_id}: {e}")
         
-        # Формируем отчет
         report = f"✅ Рассылка завершена:\nОтправлено: {successful}\nНе удалось: {len(failed)}"
         if failed:
-            report += "\n\nНе удалось отправить следующим пользователям:\n" + "\n".join(failed[:10])  # Показываем первые 10 ошибок
+            report += "\n\nНе удалось отправить следующим пользователям:\n" + "\n".join(failed[:10])
         await update.message.reply_text(report)
     
     except Exception as e:
@@ -274,7 +306,31 @@ async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     return ConversationHandler.END
 
-# Остальные функции (list_command, cancel, error_handler) остаются без изменений
+async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await is_owner(update.effective_user.id):
+        await update.message.reply_text("⛔ Доступ запрещен")
+        return
+    
+    if not user_data:
+        await update.message.reply_text("📋 Список пользователей пуст")
+        return
+    
+    user_list = "\n".join(
+        f"@{data['username']} - {data['full_name']} (ID: {user_id})"
+        for user_id, data in user_data.items()
+    )
+    
+    await update.message.reply_text(f"📋 Список пользователей:\n\n{user_list}")
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды отмены действий"""
+    await update.message.reply_text("❌ Текущее действие отменено")
+    return ConversationHandler.END
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.error(f"Update {update} caused error: {context.error}")
+    if update.message:
+        await update.message.reply_text("⚠️ Произошла внутренняя ошибка")
 
 def main():
     app = ApplicationBuilder().token(TOKEN).build()

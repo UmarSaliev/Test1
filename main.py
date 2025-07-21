@@ -189,6 +189,27 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("ℹ️ Отправьте текст или фото для поиска")
 
+# Обработчик команды /help
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает список доступных команд"""
+    help_text = (
+        "📚 Доступные команды:\n"
+        "/start - Начать работу с ботом\n"
+        "/task <текст> - Решить задачу\n"
+        "/formula <текст> - Найти формулу\n"
+        "/theorem <текст> - Информация о теореме\n"
+        "/search <текст/фото> - Поиск информации\n"
+    )
+    
+    if await is_owner(update.effective_user.id):
+        help_text += (
+            "\n👨‍🏫 Команды для учителя:\n"
+            "/broadcast - Рассылка сообщений\n"
+            "/list - Список учеников"
+        )
+    
+    await update.message.reply_text(help_text)
+
 # Команды для учителей
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_owner(update.effective_user.id):

@@ -62,6 +62,37 @@ async def debug_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Вы учитель: {'✅' if await is_owner(user_id) else '❌'}"
     )
 
+# Обработка имени пользователя
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if str(user_id) not in user_data:
+        await update.message.reply_text(
+            "👋 Добро пожаловать! Пожалуйста, введите ваше имя и фамилию:"
+        )
+        return GET_NAME
+    else:
+        await update.message.reply_text(
+            "🤖 Я ваш математический помощник. Используйте /help для списка команд."
+        )
+        return ConversationHandler.END
+
+async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    full_name = update.message.text
+    username = update.effective_user.username or "нет_username"
+    
+    user_data[str(user_id)] = {
+        "full_name": full_name,
+        "username": username
+    }
+    save_user_data(user_data)
+    
+    await update.message.reply_text(
+        f"✅ Спасибо, {full_name}! Теперь вы можете использовать все функции бота.\n"
+        "Напишите /help для списка команд."
+    )
+    return ConversationHandler.END
+
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Новая версия команды /broadcast"""
     user_id = update.effective_user.id
@@ -87,7 +118,6 @@ async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     failed = []
 
     try:
-        # Для текста
         if update.message.text:
             for user_id_str, user_info in user_data.items():
                 try:
@@ -100,7 +130,6 @@ async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     failed.append(user_id_str)
                     logger.warning(f"Ошибка отправки для {user_id_str}: {e}")
 
-        # Для фото
         elif update.message.photo:
             photo = update.message.photo[-1].file_id
             caption = update.message.caption or ""
@@ -116,7 +145,6 @@ async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     failed.append(user_id_str)
                     logger.warning(f"Ошибка отправки фото для {user_id_str}: {e}")
 
-        # Отчет
         report = [
             f"📊 Результат:",
             f"• Отправлено: {successful}",
@@ -133,7 +161,7 @@ async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     return ConversationHandler.END
 
-# ИИ-команды (исправленные отступы)
+# ИИ-команды
 async def theorem_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("ℹ️ Пример: /theorem Теорема Пифагора")
@@ -272,10 +300,61 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message:
         await update.message.reply_text("⚠️ Произошла внутренняя ошибка")
 
+async def ask_ai(prompt: str) -> str:
+    """Улучшенная функция запроса к ИИ"""
+    if not await check_api_available():
+        return None
+
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "HTTP-Referer": f"https://t.me/{BOT_USERNAME[1:]}",
+        "X-Title": "MathHelperBot",
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "model": "meta-llama/llama-3-70b-instruct",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.7,
+        "max_tokens": 1000
+    }
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=30
+            ) as response:
+                if response.status != 200:
+                    error = await response.text()
+                    logger.error(f"API Error: {error}")
+                    return None
+                
+                data = await response.json()
+                return data["choices"][0]["message"]["content"]
+    except Exception as e:
+        logger.error(f"AI request failed: {str(e)}", exc_info=True)
+        return None
+
+async def check_api_available():
+    """Проверяет доступность OpenRouter API"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                "https://openrouter.ai/api/v1/models",
+                headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"},
+                timeout=10
+            ) as resp:
+                return resp.status == 200
+    except:
+        return False
+
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
-    # Важно: сначала регистрируем обычные команды
+    # Сначала регистрируем обычные команды
     app.add_handler(CommandHandler("debug_id", debug_id))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
     

@@ -33,7 +33,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- Исправленные функции для broadcast ---
+# Загрузка/сохранение данных пользователей
 def load_user_data():
     try:
         with open(USER_DATA_FILE, 'r') as f:
@@ -133,26 +133,150 @@ async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     return ConversationHandler.END
 
-# --- Все ИИ-команды остаются БЕЗ ИЗМЕНЕНИЙ ---
+# ИИ-команды (исправленные отступы)
 async def theorem_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # ... (полностью без изменений) ...
+    if not context.args:
+        await update.message.reply_text("ℹ️ Пример: /theorem Теорема Пифагора")
+        return
+    
+    query = " ".join(context.args)
+    await update.message.reply_chat_action(action="typing")
+    
+    prompt = (
+        f"Объясни теорему '{query}' на русском языке. Дайте:\n"
+        f"1. Четкую формулировку\n"
+        f"2. Подробное доказательство\n"
+        f"3. Примеры применения\n"
+        f"4. Исторический контекст\n\n"
+        f"Ответ должен быть строго на русском языке, точным и понятным."
+    )
+    
+    response = await ask_ai(prompt)
+    if response:
+        await update.message.reply_text(f"📚 Теорема {query}:\n\n{response}")
+    else:
+        await update.message.reply_text(
+            "⚠️ Не удалось обработать запрос. Возможные причины:\n"
+            "1. Проблемы с API\n"
+            "2. Недостаточно токенов\n"
+            "3. Слишком сложный запрос\n\n"
+            "Попробуйте позже или упростите запрос."
+        )
 
 async def formula_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # ... (полностью без изменений) ...
+    if not context.args:
+        await update.message.reply_text("ℹ️ Пример: /formula Квадратное уравнение")
+        return
+    
+    query = " ".join(context.args)
+    await update.message.reply_chat_action(action="typing")
+    
+    prompt = (
+        f"Объясни формулу '{query}' на русском языке:\n"
+        f"- Математическая запись\n- Пояснение элементов\n- Примеры использования\n- Типичные задачи"
+    )
+    
+    response = await ask_ai(prompt)
+    if response:
+        await update.message.reply_text(f"🧮 Формула {query}:\n\n{response}")
+    else:
+        await update.message.reply_text("⚠️ Не удалось получить ответ. Попробуйте позже.")
 
 async def task_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # ... (полностью без изменений) ...
+    if not context.args:
+        await update.message.reply_text("ℹ️ Пример: /task Найти площадь круга радиусом 5 см")
+        return
+    
+    query = " ".join(context.args)
+    await update.message.reply_chat_action(action="typing")
+    
+    prompt = (
+        f"Реши задачу: '{query}'. Дайте:\n"
+        f"1. Пошаговое решение с объяснением каждого шага\n"
+        f"2. Итоговый ответ с единицами измерения\n"
+        f"3. Альтернативные методы решения (если есть)\n\n"
+        f"Ответ должен быть строго на русском языке, точным и понятным."
+    )
+    
+    response = await ask_ai(prompt)
+    if response:
+        await update.message.reply_text(f"📝 Решение задачи:\n\n{response}")
+    else:
+        await update.message.reply_text(
+            "⚠️ Не удалось решить задачу. Возможные причины:\n"
+            "1. Некорректная формулировка задачи\n"
+            "2. Проблемы с API\n"
+            "3. Слишком сложная задача\n\n"
+            "Попробуйте переформулировать запрос или обратиться позже."
+        )
 
 async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # ... (полностью без изменений) ...
+    if update.message.photo:
+        await update.message.reply_text("🔍 Анализирую изображение...")
+        await update.message.reply_text("⚠️ Поиск по изображениям временно недоступен")
+    elif context.args:
+        query = " ".join(context.args)
+        await update.message.reply_chat_action(action="typing")
+        
+        prompt = f"Найди информацию по запросу: '{query}'. Дай краткий и точный ответ на русском языке."
+        
+        response = await ask_ai(prompt)
+        if response:
+            await update.message.reply_text(f"🔎 Результаты по запросу '{query}':\n\n{response}")
+        else:
+            await update.message.reply_text("⚠️ Не удалось выполнить поиск. Попробуйте позже.")
+    else:
+        await update.message.reply_text("ℹ️ Отправьте текст или фото для поиска")
 
-# ... (остальные функции тоже без изменений) ...
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    help_text = (
+        "📚 Доступные команды:\n"
+        "/start - Начать работу\n"
+        "/task <текст> - Решить задачу\n"
+        "/theorem <текст> - Объяснить теорему\n"
+        "/formula <текст> - Найти формулу\n"
+        "/search <текст> - Поиск информации\n"
+    )
+    
+    if await is_owner(update.effective_user.id):
+        help_text += (
+            "\n👨‍🏫 Команды для учителя:\n"
+            "/broadcast - Рассылка сообщений\n"
+            "/list - Список учеников"
+        )
+    
+    await update.message.reply_text(help_text)
+
+async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await is_owner(update.effective_user.id):
+        await update.message.reply_text("⛔ Доступ запрещен")
+        return
+    
+    if not user_data:
+        await update.message.reply_text("📋 Список пользователей пуст")
+        return
+    
+    user_list = "\n".join(
+        f"@{data['username']} - {data['full_name']} (ID: {user_id})"
+        for user_id, data in user_data.items()
+    )
+    
+    await update.message.reply_text(f"📋 Список пользователей:\n\n{user_list}")
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("❌ Текущее действие отменено")
+    return ConversationHandler.END
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.error(f"Update {update} caused error: {context.error}")
+    if update.message:
+        await update.message.reply_text("⚠️ Произошла внутренняя ошибка")
 
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     # Важно: сначала регистрируем обычные команды
-    app.add_handler(CommandHandler("debug_id", debug_id))  # Для отладки
+    app.add_handler(CommandHandler("debug_id", debug_id))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
     
     # Затем ConversationHandler

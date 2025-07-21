@@ -1,12 +1,14 @@
 import logging
 import os
-from telegram import Update
+import json
+from telegram import Update, InputFile
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
     ContextTypes,
-    filters
+    filters,
+    ConversationHandler
 )
 import aiohttp
 from dotenv import load_dotenv
@@ -19,6 +21,10 @@ TOKEN = os.getenv("BOT_TOKEN")
 OWNER_IDS = list(map(int, os.getenv("OWNER_IDS", "").split(","))) if os.getenv("OWNER_IDS") else []
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 BOT_USERNAME = "@Tester894bot"
+USER_DATA_FILE = "user_data.json"
+
+# Состояния для ConversationHandler
+GET_NAME, BROADCAST_MESSAGE = range(2)
 
 # Настройка логирования
 logging.basicConfig(
@@ -27,19 +33,31 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Загрузка/сохранение данных пользователей
+def load_user_data():
+    try:
+        with open(USER_DATA_FILE, 'r') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def save_user_data(data):
+    with open(USER_DATA_FILE, 'w') as f:
+        json.dump(data, f)
+
+user_data = load_user_data()
+
 async def is_owner(user_id: int) -> bool:
-    """Проверяет, является ли пользователь владельцем"""
     return user_id in OWNER_IDS
 
 async def ask_ai(prompt: str) -> str:
-    """Запрос к OpenRouter API"""
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "HTTP-Referer": f"https://t.me/{BOT_USERNAME[1:]}",
         "X-Title": "MathHelperBot"
     }
     payload = {
-        "model": "openrouter/meta-llama/llama-3-8b-instruct:free",
+        "model": "openrouter/auto",
         "messages": [{"role": "user", "content": prompt}]
     }
 
@@ -49,194 +67,235 @@ async def ask_ai(prompt: str) -> str:
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers=headers,
                 json=payload,
-                timeout=aiohttp.ClientTimeout(total=15)
+                timeout=aiohttp.ClientTimeout(total=20)
             ) as response:
+                if response.status != 200:
+                    error = await response.text()
+                    logger.error(f"API Error: {error}")
+                    return None
+                
                 data = await response.json()
                 return data["choices"][0]["message"]["content"]
     except Exception as e:
-        logger.error(f"OpenRouter error: {e}")
-        return "⚠️ Произошла ошибка при обработке запроса"
+        logger.error(f"AI Error: {str(e)}")
+        return None
 
-# Добавленная функция для обработки текстовых сообщений
-async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик текстовых сообщений"""
-    try:
-        prompt = update.message.text
-        response = await ask_ai(prompt)
-        await update.message.reply_text(response)
-    except Exception as e:
-        logger.error(f"Error in handle_text_message: {e}")
-        await update.message.reply_text("⚠️ Произошла ошибка при обработке сообщения")
-
-# Команды бота
+# Обработка имени пользователя
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if str(user_id) not in user_data:
+        await update.message.reply_text(
+            "👋 Добро пожаловать! Пожалуйста, введите ваше имя и фамилию:"
+        )
+        return GET_NAME
+    else:
+        await update.message.reply_text(
+            "🤖 Я ваш математический помощник. Используйте /help для списка команд."
+        )
+        return ConversationHandler.END
+
+async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    full_name = update.message.text
+    username = update.effective_user.username or "нет_username"
+    
+    user_data[str(user_id)] = {
+        "full_name": full_name,
+        "username": username
+    }
+    save_user_data(user_data)
+    
     await update.message.reply_text(
-        "👋 Привет! Я бот-помощник по математике.\n"
-        "Отправьте мне задачу, формулу или теорему.\n"
-        "Фото с подписью будут отправлены учителю."
+        f"✅ Спасибо, {full_name}! Теперь вы можете использовать все функции бота.\n"
+        "Напишите /help для списка команд."
     )
+    return ConversationHandler.END
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    help_text = (
-        "📚 Доступные команды:\n"
-        "/task <текст> - Решить задачу\n"
-        "/formula <текст> - Найти формулу\n"
-        "/theorem <текст> - Информация о теореме\n"
-        "/search <текст/фото> - Поиск информации"
-    )
-    
-    if await is_owner(update.effective_user.id):
-        help_text += "\n\n👨‍🏫 Команды для учителя:\n/broadcast - Рассылка\n/list - Список учеников"
-    
-    await update.message.reply_text(help_text)
-
+# Команды ИИ
 async def theorem_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка команды /theorem (например: /theorem Теорема Виетта)"""
     if not context.args:
-        await update.message.reply_text("ℹ️ Укажите название теоремы, например: /theorem Пифагора")
+        await update.message.reply_text("ℹ️ Пример: /theorem Теорема Пифагора")
         return
     
-    theorem_name = " ".join(context.args)
+    query = " ".join(context.args)
+    await update.message.reply_chat_action(action="typing")
+    
     prompt = (
-        f"Дай подробное объяснение теоремы {theorem_name}:\n"
-        f"- Формулировка\n"
-        f"- Доказательство\n"
-        f"- Примеры применения\n"
-        f"- Историческая справка"
+        f"Дай подробное объяснение теоремы '{query}' на русском языке:\n"
+        f"- Формулировка\n- Доказательство\n- Примеры применения\n- Историческая справка"
     )
     
-    try:
-        await update.message.reply_chat_action(action="typing")
-        response = await ask_ai(prompt)
-        await update.message.reply_text(f"📚 Теорема {theorem_name}:\n\n{response}")
-    except Exception as e:
-        logger.error(f"Theorem error: {e}")
-        await update.message.reply_text("⚠️ Не удалось найти информацию о теореме")
+    response = await ask_ai(prompt)
+    if response:
+        await update.message.reply_text(f"📚 Теорема {query}:\n\n{response}")
+    else:
+        await update.message.reply_text("⚠️ Не удалось получить ответ. Попробуйте позже.")
 
 async def formula_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка команды /formula"""
     if not context.args:
-        await update.message.reply_text("ℹ️ Укажите название формулы, например: /formula квадратное уравнение")
+        await update.message.reply_text("ℹ️ Пример: /formula Квадратное уравнение")
         return
     
-    formula_name = " ".join(context.args)
+    query = " ".join(context.args)
+    await update.message.reply_chat_action(action="typing")
+    
     prompt = (
-        f"Объясни формулу {formula_name}:\n"
-        f"- Математическая запись\n"
-        f"- Пояснение каждого элемента\n"
-        f"- Примеры использования\n"
-        f"- Типичные задачи"
+        f"Объясни формулу '{query}' на русском языке:\n"
+        f"- Математическая запись\n- Пояснение элементов\n- Примеры использования\n- Типичные задачи"
     )
     
-    try:
-        await update.message.reply_chat_action(action="typing")
-        response = await ask_ai(prompt)
-        await update.message.reply_text(f"🧮 Формула {formula_name}:\n\n{response}")
-    except Exception as e:
-        logger.error(f"Formula error: {e}")
-        await update.message.reply_text("⚠️ Не удалось найти информацию о формуле")
+    response = await ask_ai(prompt)
+    if response:
+        await update.message.reply_text(f"🧮 Формула {query}:\n\n{response}")
+    else:
+        await update.message.reply_text("⚠️ Не удалось получить ответ. Попробуйте позже.")
 
 async def task_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка команды /task"""
     if not context.args:
-        await update.message.reply_text("ℹ️ Укажите задачу, например: /task Найти площадь круга радиусом 5 см")
+        await update.message.reply_text("ℹ️ Пример: /task Найти площадь круга радиусом 5 см")
         return
     
-    task_text = " ".join(context.args)
+    query = " ".join(context.args)
+    await update.message.reply_chat_action(action="typing")
+    
     prompt = (
-        f"Реши задачу: {task_text}\n"
-        f"- Подробное пошаговое решение\n"
-        f"- Объяснение каждого шага\n"
-        f"- Итоговый ответ"
+        f"Реши задачу: '{query}'. Дай пошаговое решение на русском языке с объяснением каждого шага."
     )
     
-    try:
-        await update.message.reply_chat_action(action="typing")
-        response = await ask_ai(prompt)
+    response = await ask_ai(prompt)
+    if response:
         await update.message.reply_text(f"📝 Решение задачи:\n\n{response}")
-    except Exception as e:
-        logger.error(f"Task error: {e}")
-        await update.message.reply_text("⚠️ Не удалось решить задачу")
-
-async def handle_photo_with_caption(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка фото с подписью (ФИО и др.)"""
-    photo = update.message.photo[-1].file_id
-    caption = update.message.caption or "Без подписи"
-    
-    user_info = (
-        f"👤 От: {update.message.from_user.full_name}\n"
-        f"🆔 ID: {update.message.from_user.id}\n"
-        f"📝 Подпись: {caption}"
-    )
-    
-    if OWNER_IDS:
-        try:
-            for owner_id in OWNER_IDS:
-                await context.bot.send_photo(
-                    chat_id=owner_id,
-                    photo=photo,
-                    caption=user_info
-                )
-            await update.message.reply_text("📤 Фото с подписью отправлено учителю!")
-        except Exception as e:
-            logger.error(f"Photo forwarding error: {e}")
-            await update.message.reply_text("⚠️ Не удалось отправить фото")
     else:
-        await update.message.reply_text("✅ Фото получено")
+        await update.message.reply_text("⚠️ Не удалось решить задачу. Попробуйте позже.")
 
+async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.photo:
+        # Обработка поиска по фото
+        await update.message.reply_text("🔍 Анализирую изображение...")
+        # Здесь можно добавить обработку фото через API
+        await update.message.reply_text("⚠️ Поиск по изображениям временно недоступен")
+    elif context.args:
+        # Обработка текстового поиска
+        query = " ".join(context.args)
+        await update.message.reply_chat_action(action="typing")
+        
+        prompt = f"Найди информацию по запросу: '{query}'. Дай краткий и точный ответ на русском языке."
+        
+        response = await ask_ai(prompt)
+        if response:
+            await update.message.reply_text(f"🔎 Результаты по запросу '{query}':\n\n{response}")
+        else:
+            await update.message.reply_text("⚠️ Не удалось выполнить поиск. Попробуйте позже.")
+    else:
+        await update.message.reply_text("ℹ️ Отправьте текст или фото для поиска")
+
+# Команды для учителей
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда рассылки (/broadcast)"""
     if not await is_owner(update.effective_user.id):
         await update.message.reply_text("⛔ Доступ запрещен")
         return
     
-    if not context.args:
-        await update.message.reply_text("ℹ️ Укажите сообщение для рассылки")
-        return
+    await update.message.reply_text(
+        "📢 Введите сообщение для рассылки (текст или фото с подписью):\n"
+        "Используйте /cancel для отмены"
+    )
+    return BROADCAST_MESSAGE
+
+async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    successful = 0
+    failed = 0
     
-    await update.message.reply_text("📢 Рассылка начата")
+    if update.message.text:
+        # Текстовая рассылка
+        for user_id, data in user_data.items():
+            try:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=f"📢 Сообщение от учителя:\n\n{update.message.text}"
+                )
+                successful += 1
+            except Exception as e:
+                logger.error(f"Broadcast error to {user_id}: {str(e)}")
+                failed += 1
+    elif update.message.photo:
+        # Рассылка фото
+        photo = update.message.photo[-1].file_id
+        caption = update.message.caption or ""
+        
+        for user_id, data in user_data.items():
+            try:
+                await context.bot.send_photo(
+                    chat_id=user_id,
+                    photo=photo,
+                    caption=f"📢 От учителя:\n\n{caption}" if caption else "📢 Сообщение от учителя"
+                )
+                successful += 1
+            except Exception as e:
+                logger.error(f"Broadcast photo error to {user_id}: {str(e)}")
+                failed += 1
+    
+    await update.message.reply_text(
+        f"✅ Рассылка завершена:\n"
+        f"• Успешно: {successful}\n"
+        f"• Не доставлено: {failed}"
+    )
+    return ConversationHandler.END
 
 async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда списка (/list)"""
     if not await is_owner(update.effective_user.id):
         await update.message.reply_text("⛔ Доступ запрещен")
         return
     
-    await update.message.reply_text("📋 Список учеников")
+    if not user_data:
+        await update.message.reply_text("📋 Список пользователей пуст")
+        return
+    
+    user_list = "\n".join(
+        f"@{data['username']} - {data['full_name']} (ID: {user_id})"
+        for user_id, data in user_data.items()
+    )
+    
+    await update.message.reply_text(f"📋 Список пользователей:\n\n{user_list}")
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("❌ Действие отменено")
+    return ConversationHandler.END
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Глобальный обработчик ошибок"""
     logger.error(f"Update {update} caused error: {context.error}")
     if update.message:
         await update.message.reply_text("⚠️ Произошла внутренняя ошибка")
 
 def main():
-    """Запуск бота"""
     app = ApplicationBuilder().token(TOKEN).build()
 
-    # Регистрация команд
-    command_handlers = [
-        ('start', start),
-        ('help', help_command),
-        ('theorem', theorem_command),
-        ('formula', formula_command),
-        ('task', task_command),
-        ('broadcast', broadcast_command),
-        ('list', list_command)
-    ]
-    
-    for command, handler in command_handlers:
-        app.add_handler(CommandHandler(command, handler))
+    # Обработчик регистрации
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("start", start)],
+        states={
+            GET_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
+            BROADCAST_MESSAGE: [
+                MessageHandler(filters.TEXT | filters.PHOTO, broadcast_message),
+                CommandHandler("cancel", cancel)
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)]
+    )
 
-    # Обработка сообщений
-    app.add_handler(MessageHandler(filters.PHOTO & filters.CAPTION, handle_photo_with_caption))
-    app.add_handler(MessageHandler(filters.PHOTO & ~filters.CAPTION, handle_photo_with_caption))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
+    # Команды
+    app.add_handler(conv_handler)
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("theorem", theorem_command))
+    app.add_handler(CommandHandler("formula", formula_command))
+    app.add_handler(CommandHandler("task", task_command))
+    app.add_handler(CommandHandler("search", search_command))
+    app.add_handler(CommandHandler("list", list_command))
+    app.add_handler(CommandHandler("broadcast", broadcast_command))
 
     # Обработчик ошибок
     app.add_error_handler(error_handler)
 
-    logger.info("Бот запущен и готов к работе")
+    logger.info("Бот запущен")
     app.run_polling()
 
 if __name__ == "__main__":

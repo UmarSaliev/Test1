@@ -18,7 +18,7 @@ load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
 OWNER_IDS = list(map(int, os.getenv("OWNER_IDS", "").split(","))) if os.getenv("OWNER_IDS") else []
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-BOT_USERNAME = "@Tester894bot"  # Замените на реальный юзернейм
+BOT_USERNAME = "@Tester894bot"
 
 # Настройка логирования
 logging.basicConfig(
@@ -56,6 +56,17 @@ async def ask_ai(prompt: str) -> str:
     except Exception as e:
         logger.error(f"OpenRouter error: {e}")
         return "⚠️ Произошла ошибка при обработке запроса"
+
+# Добавленная функция для обработки текстовых сообщений
+async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик текстовых сообщений"""
+    try:
+        prompt = update.message.text
+        response = await ask_ai(prompt)
+        await update.message.reply_text(response)
+    except Exception as e:
+        logger.error(f"Error in handle_text_message: {e}")
+        await update.message.reply_text("⚠️ Произошла ошибка при обработке сообщения")
 
 # Команды бота
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -183,7 +194,6 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("ℹ️ Укажите сообщение для рассылки")
         return
     
-    # Здесь должна быть реализация рассылки
     await update.message.reply_text("📢 Рассылка начата")
 
 async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -192,7 +202,6 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ Доступ запрещен")
         return
     
-    # Здесь должна быть реализация вывода списка
     await update.message.reply_text("📋 Список учеников")
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):

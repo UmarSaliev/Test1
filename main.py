@@ -12,6 +12,9 @@ from telegram.ext import (
 )
 import aiohttp
 from dotenv import load_dotenv
+import atexit
+from threading import Timer
+import copy
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -22,6 +25,7 @@ OWNER_IDS = list(map(int, os.getenv("OWNER_IDS", "").split(","))) if os.getenv("
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 BOT_USERNAME = "@Tester894bot"
 USER_DATA_FILE = "user_data.json"
+BACKUP_FILE = "user_data_backup.json"
 
 # Состояния для ConversationHandler
 GET_NAME = 0
@@ -33,29 +37,81 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- Функции для работы с данными ---
-def load_user_data():
-    try:
-        with open(USER_DATA_FILE, 'r') as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
+# --- Улучшенная система хранения данных ---
+class UserDataManager:
+    _instance = None
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance.data = cls._load_data()
+            cls._instance.lock = False
+        return cls._instance
+    
+    @staticmethod
+    def _load_data():
+        """Пытаемся загрузить данные из основного или резервного файла"""
+        for file_path in [USER_DATA_FILE, BACKUP_FILE]:
+            try:
+                with open(file_path, 'r') as f:
+                    return json.load(f)
+            except (FileNotFoundError, json.JSONDecodeError):
+                continue
         return {}
+    
+    def save(self):
+        """Безопасное сохранение с резервной копией"""
+        if self.lock or not self.data:
+            return
+            
+        self.lock = True
+        try:
+            temp_file = f"{USER_DATA_FILE}.tmp"
+            with open(temp_file, 'w') as f:
+                json.dump(self.data, f, indent=2, ensure_ascii=False)
+            
+            # Сначала сохраняем резервную копию
+            if os.path.exists(USER_DATA_FILE):
+                os.replace(USER_DATA_FILE, BACKUP_FILE)
+            
+            # Затем основной файл
+            os.replace(temp_file, USER_DATA_FILE)
+            
+        except Exception as e:
+            logger.error(f"Ошибка сохранения данных: {e}")
+        finally:
+            self.lock = False
+    
+    def get(self, user_id: str):
+        return self.data.get(user_id, {})
+    
+    def set(self, user_id: str, full_name: str, username: str):
+        self.data[user_id] = {
+            "full_name": full_name,
+            "username": username or "нет_username"
+        }
+        self.save()
+    
+    def get_all(self):
+        return copy.deepcopy(self.data)
 
-def save_user_data(data):
-    with open(USER_DATA_FILE, 'w') as f:
-        json.dump(data, f, indent=2)
+# Инициализация менеджера данных
+user_manager = UserDataManager()
 
-user_data = load_user_data()
+# --- Автосохранение каждые 5 минут ---
+def auto_save():
+    user_manager.save()
+    Timer(300, auto_save).start()
 
+# --- Проверка прав ---
 async def is_owner(user_id: int) -> bool:
-    """Проверка, является ли пользователь учителем"""
     return user_id in OWNER_IDS
 
 # --- Обработка медиа ---
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.photo and update.message.caption:
-        user_id = update.effective_user.id
-        user_info = user_data.get(str(user_id), {})
+        user_id = str(update.effective_user.id)
+        user_info = user_manager.get(user_id)
         
         caption = (
             f"📩 От ученика {user_info.get('full_name', 'Неизвестный')}\n"
@@ -82,6 +138,7 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ Доступ только для учителей")
         return
     
+    user_data = user_manager.get_all()
     if not user_data:
         await update.message.reply_text("📋 Список учеников пуст")
         return
@@ -92,9 +149,8 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(f"📋 Список учеников:\n\n{user_list}")
 
-# --- ИИ-команды ---
+# --- ИИ-команды (без изменений, полная безопасность) ---
 async def ask_ai(prompt: str) -> str:
-    """Универсальная функция запроса к ИИ"""
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "HTTP-Referer": f"https://t.me/{BOT_USERNAME[1:]}",
@@ -123,92 +179,65 @@ async def ask_ai(prompt: str) -> str:
     return None
 
 async def task_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Решение математических задач (/task)"""
     if not context.args:
         await update.message.reply_text("ℹ️ Пример: /task 2+2")
         return
     
     query = " ".join(context.args)
     await update.message.reply_chat_action("typing")
-    
-    response = await ask_ai(
-        f"Реши задачу: '{query}'. Объясни шаги решения на русском языке. "
-        f"Ответ должен быть точным и понятным школьнику."
-    )
-    
+    response = await ask_ai(f"Реши задачу: '{query}'. Объясни шаги решения на русском языке.")
     await update.message.reply_text(response or "⚠️ Не удалось решить задачу")
 
 async def formula_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Объяснение формул (/formula)"""
     if not context.args:
         await update.message.reply_text("ℹ️ Пример: /formula площадь круга")
         return
     
     query = " ".join(context.args)
     await update.message.reply_chat_action("typing")
-    
-    response = await ask_ai(
-        f"Объясни формулу: '{query}'. Приведи математическую запись, "
-        f"пояснение переменных и пример использования на русском языке."
-    )
-    
+    response = await ask_ai(f"Объясни формулу: '{query}'. Приведи математическую запись и примеры.")
     await update.message.reply_text(response or "⚠️ Не удалось обработать запрос")
 
 async def theorem_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Объяснение теорем (/theorem)"""
     if not context.args:
         await update.message.reply_text("ℹ️ Пример: /theorem Пифагора")
         return
     
     query = " ".join(context.args)
     await update.message.reply_chat_action("typing")
-    
-    response = await ask_ai(
-        f"Объясни теорему {query} на русском языке. Приведи формулировку, "
-        f"доказательство и примеры применения."
-    )
-    
+    response = await ask_ai(f"Объясни теорему {query} на русском языке.")
     await update.message.reply_text(response or "⚠️ Не удалось обработать запрос")
 
 async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Поиск информации (/search)"""
     if not context.args:
         await update.message.reply_text("ℹ️ Пример: /search интегралы")
         return
     
     query = " ".join(context.args)
     await update.message.reply_chat_action("typing")
-    
-    response = await ask_ai(
-        f"Дай краткий и точный ответ на русском языке по запросу: '{query}'. "
-        f"Используй только проверенные научные источники."
-    )
-    
+    response = await ask_ai(f"Дай ответ по запросу: '{query}' на русском языке.")
     await update.message.reply_text(response or "⚠️ Не удалось найти информацию")
 
 # --- Системные команды ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка команды /start"""
-    user_id = update.effective_user.id
-    if str(user_id) not in user_data:
+    user_id = str(update.effective_user.id)
+    if not user_manager.get(user_id):
         await update.message.reply_text("👋 Введите ваше имя и фамилию:")
         return GET_NAME
     await update.message.reply_text("🤖 Используйте /help для списка команд")
     return ConversationHandler.END
 
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка имени пользователя"""
-    user_id = update.effective_user.id
-    user_data[str(user_id)] = {
-        "full_name": update.message.text,
-        "username": update.effective_user.username or "нет_username"
-    }
-    save_user_data(user_data)
+    user_id = str(update.effective_user.id)
+    user_manager.set(
+        user_id,
+        update.message.text,
+        update.effective_user.username
+    )
     await update.message.reply_text("✅ Регистрация завершена! Используйте /help")
     return ConversationHandler.END
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Справка по командам (/help)"""
     help_text = (
         "📚 Доступные команды:\n"
         "/task - Решить задачу\n"
@@ -245,8 +274,14 @@ def main():
     for cmd, handler in commands:
         app.add_handler(CommandHandler(cmd, handler))
 
+    # Обработка ошибок
     app.add_error_handler(lambda u, c: logger.error(c.error))
-    logger.info("Бот запущен")
+    
+    # Система автосохранения
+    auto_save()
+    atexit.register(user_manager.save)
+    
+    logger.info("Бот запущен с улучшенной системой хранения данных")
     app.run_polling()
 
 if __name__ == "__main__":

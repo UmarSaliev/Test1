@@ -1,4 +1,3 @@
-
 import logging
 import os
 import json
@@ -36,15 +35,15 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
-logger = logging.getLogger(name)
+logger = logging.getLogger(__name__)
 
 # --- Улучшенная система хранения данных ---
 class UserDataManager:
     _instance = None
     
-    def new(cls):
+    def __new__(cls):
         if cls._instance is None:
-            cls._instance = super().new(cls)
+            cls._instance = super().__new__(cls)
             cls._instance.data = cls._load_data()
             cls._instance.lock = False
         return cls._instance
@@ -129,9 +128,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Получение имени пользователя и сохранение данных"""
     user = update.effective_user
-
-Bianconeri, [22.07.2025 13:30]
-full_name = update.message.text
+    full_name = update.message.text
     user_id = str(user.id)
     
     user_manager.set(user_id, full_name, user.username)
@@ -234,9 +231,8 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         full_caption = base_caption
         if update.message.caption:
             full_caption += f"\n\n{update.message.caption}"
-
-Bianconeri, [22.07.2025 13:30]
-# Отправка всем учителям
+        
+        # Отправка всем учителям
         for teacher_id in OWNER_IDS:
             try:
                 await context.bot.send_photo(
@@ -337,9 +333,7 @@ async def theorem_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Поиск информации"""
-
-Bianconeri, [22.07.2025 13:30]
-if not context.args:
+    if not context.args:
         await update.message.reply_text("Пожалуйста, укажите запрос после команды /search")
         return
     
@@ -446,5 +440,5 @@ def main():
     logger.info("Бот запущен с функцией рассылки")
     app.run_polling()
 
-if name == "main":
+if __name__ == "__main__":
     main()

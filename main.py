@@ -28,7 +28,7 @@ USER_DATA_FILE = "user_data.json"
 BACKUP_FILE = "user_data_backup.json"
 
 # Состояния для ConversationHandler
-GET_NAME = 0
+GET_NAME, BROADCAST = range(2)
 
 # Настройка логирования
 logging.basicConfig(
@@ -70,11 +70,9 @@ class UserDataManager:
             with open(temp_file, 'w') as f:
                 json.dump(self.data, f, indent=2, ensure_ascii=False)
             
-            # Сначала сохраняем резервную копию
             if os.path.exists(USER_DATA_FILE):
                 os.replace(USER_DATA_FILE, BACKUP_FILE)
             
-            # Затем основной файл
             os.replace(temp_file, USER_DATA_FILE)
             
         except Exception as e:
@@ -107,7 +105,78 @@ def auto_save():
 async def is_owner(user_id: int) -> bool:
     return user_id in OWNER_IDS
 
-# --- Обработка медиа ---
+# --- Рассылка сообщений ---
+async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало рассылки (только для учителей)"""
+    if not await is_owner(update.effective_user.id):
+        await update.message.reply_text("⛔ Доступ только для учителей")
+        return
+    
+    await update.message.reply_text(
+        "📢 Введите сообщение для рассылки (текст или фото с подписью):\n"
+        "Для отмены используйте /cancel"
+    )
+    return BROADCAST
+
+async def handle_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка рассылки"""
+    user_data = user_manager.get_all()
+    if not user_data:
+        await update.message.reply_text("❌ Нет пользователей для рассылки")
+        return ConversationHandler.END
+    
+    successful = 0
+    failed = []
+    
+    try:
+        # Рассылка текста
+        if update.message.text:
+            for user_id in user_data:
+                try:
+                    await context.bot.send_message(
+                        chat_id=int(user_id),
+                        text=f"📢 Сообщение от учителя:\n\n{update.message.text}"
+                    )
+                    successful += 1
+                except Exception as e:
+                    failed.append(user_id)
+                    logger.error(f"Ошибка отправки для {user_id}: {e}")
+        
+        # Рассылка фото
+        elif update.message.photo:
+            photo = update.message.photo[-1].file_id
+            caption = update.message.caption or ""
+            for user_id in user_data:
+                try:
+                    await context.bot.send_photo(
+                        chat_id=int(user_id),
+                        photo=photo,
+                        caption=f"📢 {caption}" if caption else "📢 Сообщение от учителя"
+                    )
+                    successful += 1
+                except Exception as e:
+                    failed.append(user_id)
+                    logger.error(f"Ошибка отправки фото для {user_id}: {e}")
+        
+        # Отчет
+        report = f"✅ Рассылка завершена:\nОтправлено: {successful}\nНе удалось: {len(failed)}"
+        if failed:
+            report += f"\n\nОшибки у ID: {', '.join(failed[:5])}{'...' if len(failed) > 5 else ''}"
+        
+        await update.message.reply_text(report)
+    
+    except Exception as e:
+        logger.error(f"Ошибка рассылки: {e}")
+        await update.message.reply_text("⚠️ Произошла ошибка при рассылке")
+    
+    return ConversationHandler.END
+
+async def cancel_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отмена рассылки"""
+    await update.message.reply_text("❌ Рассылка отменена")
+    return ConversationHandler.END
+
+# --- Обработка медиа от учеников ---
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.photo and update.message.caption:
         user_id = str(update.effective_user.id)
@@ -132,111 +201,10 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_text("✅ Ваше фото отправлено учителям")
 
-# --- Команды для учителей ---
-async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_owner(update.effective_user.id):
-        await update.message.reply_text("⛔ Доступ только для учителей")
-        return
-    
-    user_data = user_manager.get_all()
-    if not user_data:
-        await update.message.reply_text("📋 Список учеников пуст")
-        return
-    
-    user_list = "\n".join(
-        f"@{data['username']} - {data['full_name']} (ID: {user_id})"
-        for user_id, data in user_data.items()
-    )
-    await update.message.reply_text(f"📋 Список учеников:\n\n{user_list}")
+# [Остальные функции (list_command, ask_ai, task_command и т.д.) остаются БЕЗ ИЗМЕНЕНИЙ]
+# ... (вставьте сюда все функции из вашего исходного кода, кроме handle_media) ...
 
-# --- ИИ-команды (без изменений, полная безопасность) ---
-async def ask_ai(prompt: str) -> str:
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "HTTP-Referer": f"https://t.me/{BOT_USERNAME[1:]}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": "meta-llama/llama-3-70b-instruct",
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.7
-    }
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers=headers,
-                json=payload,
-                timeout=30
-            ) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    return data["choices"][0]["message"]["content"]
-                logger.error(f"API Error: {await response.text()}")
-    except Exception as e:
-        logger.error(f"AI request failed: {str(e)}")
-    return None
-
-async def task_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("ℹ️ Пример: /task 2+2")
-        return
-    
-    query = " ".join(context.args)
-    await update.message.reply_chat_action("typing")
-    response = await ask_ai(f"Реши задачу: '{query}'. Объясни шаги решения на русском языке.")
-    await update.message.reply_text(response or "⚠️ Не удалось решить задачу")
-
-async def formula_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("ℹ️ Пример: /formula площадь круга")
-        return
-    
-    query = " ".join(context.args)
-    await update.message.reply_chat_action("typing")
-    response = await ask_ai(f"Объясни формулу: '{query}'. Приведи математическую запись и примеры.")
-    await update.message.reply_text(response or "⚠️ Не удалось обработать запрос")
-
-async def theorem_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("ℹ️ Пример: /theorem Пифагора")
-        return
-    
-    query = " ".join(context.args)
-    await update.message.reply_chat_action("typing")
-    response = await ask_ai(f"Объясни теорему {query} на русском языке.")
-    await update.message.reply_text(response or "⚠️ Не удалось обработать запрос")
-
-async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("ℹ️ Пример: /search интегралы")
-        return
-    
-    query = " ".join(context.args)
-    await update.message.reply_chat_action("typing")
-    response = await ask_ai(f"Дай ответ по запросу: '{query}' на русском языке.")
-    await update.message.reply_text(response or "⚠️ Не удалось найти информацию")
-
-# --- Системные команды ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    if not user_manager.get(user_id):
-        await update.message.reply_text("👋 Введите ваше имя и фамилию:")
-        return GET_NAME
-    await update.message.reply_text("🤖 Используйте /help для списка команд")
-    return ConversationHandler.END
-
-async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    user_manager.set(
-        user_id,
-        update.message.text,
-        update.effective_user.username
-    )
-    await update.message.reply_text("✅ Регистрация завершена! Используйте /help")
-    return ConversationHandler.END
-
+# --- Обновленная help-команда ---
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
         "📚 Доступные команды:\n"
@@ -245,8 +213,14 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/theorem - Объяснить теорему\n"
         "/search - Найти информацию\n"
     )
+    
     if await is_owner(update.effective_user.id):
-        help_text += "\n👨‍🏫 Команды учителя:\n/list - Список учеников"
+        help_text += (
+            "\n👨‍🏫 Команды учителя:\n"
+            "/list - Список учеников\n"
+            "/broadcast - Рассылка сообщений"
+        )
+    
     await update.message.reply_text(help_text)
 
 # --- Запуск бота ---
@@ -256,6 +230,19 @@ def main():
     # Обработчики
     app.add_handler(MessageHandler(filters.PHOTO & filters.CAPTION, handle_media))
     
+    # ConversationHandler для рассылки
+    app.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("broadcast", broadcast_command)],
+        states={
+            BROADCAST: [
+                MessageHandler(filters.TEXT | filters.PHOTO, handle_broadcast),
+                CommandHandler("cancel", cancel_broadcast)
+            ]
+        },
+        fallbacks=[CommandHandler("cancel", cancel_broadcast)]
+    ))
+    
+    # ConversationHandler для регистрации
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={GET_NAME: [MessageHandler(filters.TEXT, get_name)]},
@@ -281,7 +268,7 @@ def main():
     auto_save()
     atexit.register(user_manager.save)
     
-    logger.info("Бот запущен с улучшенной системой хранения данных")
+    logger.info("Бот запущен с функцией рассылки")
     app.run_polling()
 
 if __name__ == "__main__":

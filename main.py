@@ -1,3 +1,4 @@
+
 import logging
 import os
 import json
@@ -35,15 +36,15 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(name)
 
 # --- Улучшенная система хранения данных ---
 class UserDataManager:
     _instance = None
     
-    def __new__(cls):
+    def new(cls):
         if cls._instance is None:
-            cls._instance = super().__new__(cls)
+            cls._instance = super().new(cls)
             cls._instance.data = cls._load_data()
             cls._instance.lock = False
         return cls._instance
@@ -128,7 +129,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Получение имени пользователя и сохранение данных"""
     user = update.effective_user
-    full_name = update.message.text
+
+Bianconeri, [22.07.2025 13:30]
+full_name = update.message.text
     user_id = str(user.id)
     
     user_manager.set(user_id, full_name, user.username)
@@ -213,28 +216,42 @@ async def cancel_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- Обработка медиа от учеников ---
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.photo and update.message.caption:
+    """Пересылает фото учеников учителям (с подписью или без)"""
+    try:
+        if not update.message.photo:
+            return  # Игнорируем сообщения без фото
+
         user_id = str(update.effective_user.id)
         user_info = user_manager.get(user_id)
         
-        caption = (
+        # Формируем базовое сообщение
+        base_caption = (
             f"📩 От ученика {user_info.get('full_name', 'Неизвестный')}\n"
-            f"@{user_info.get('username', 'нет_username')}\n\n"
-            f"{update.message.caption}"
+            f"@{user_info.get('username', 'нет_username')}"
         )
         
-        # Отправка всем учителям
+        # Добавляем подпись пользователя, если она есть
+        full_caption = base_caption
+        if update.message.caption:
+            full_caption += f"\n\n{update.message.caption}"
+
+Bianconeri, [22.07.2025 13:30]
+# Отправка всем учителям
         for teacher_id in OWNER_IDS:
             try:
                 await context.bot.send_photo(
                     chat_id=teacher_id,
                     photo=update.message.photo[-1].file_id,
-                    caption=caption
+                    caption=full_caption if full_caption else None
                 )
             except Exception as e:
                 logger.error(f"Ошибка отправки учителю {teacher_id}: {e}")
         
         await update.message.reply_text("✅ Ваше фото отправлено учителям")
+    
+    except Exception as e:
+        logger.error(f"Ошибка в handle_media: {e}")
+        await update.message.reply_text("⚠️ Произошла ошибка при отправке фото")
 
 # --- Команды ИИ ---
 async def ask_ai(prompt: str, context: str = "") -> str:
@@ -320,7 +337,9 @@ async def theorem_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Поиск информации"""
-    if not context.args:
+
+Bianconeri, [22.07.2025 13:30]
+if not context.args:
         await update.message.reply_text("Пожалуйста, укажите запрос после команды /search")
         return
     
@@ -384,7 +403,7 @@ def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     # Обработчики
-    app.add_handler(MessageHandler(filters.PHOTO & filters.CAPTION, handle_media))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_media))  # Ловим ВСЕ фото
     
     # ConversationHandler для рассылки
     app.add_handler(ConversationHandler(
@@ -427,5 +446,5 @@ def main():
     logger.info("Бот запущен с функцией рассылки")
     app.run_polling()
 
-if __name__ == "__main__":
+if name == "main":
     main()

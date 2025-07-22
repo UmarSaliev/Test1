@@ -105,6 +105,41 @@ def auto_save():
 async def is_owner(user_id: int) -> bool:
     return user_id in OWNER_IDS
 
+# --- Регистрация пользователей ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка команды /start - начало регистрации пользователя"""
+    user = update.effective_user
+    user_id = str(user.id)
+    
+    # Проверяем, есть ли уже данные о пользователе
+    if user_manager.get(user_id):
+        await update.message.reply_text(
+            f"👋 С возвращением, {user.full_name}!\n"
+            f"Используйте /help для списка команд"
+        )
+        return ConversationHandler.END
+    
+    await update.message.reply_text(
+        "👋 Добро пожаловать! Я - бот для помощи в учебе.\n"
+        "Пожалуйста, введите ваше полное имя (как в школе):"
+    )
+    return GET_NAME
+
+async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение имени пользователя и сохранение данных"""
+    user = update.effective_user
+    full_name = update.message.text
+    user_id = str(user.id)
+    
+    user_manager.set(user_id, full_name, user.username)
+    
+    await update.message.reply_text(
+        f"✅ Спасибо, {full_name}!\n"
+        f"Теперь вы можете использовать все функции бота.\n"
+        f"Используйте /help для списка команд"
+    )
+    return ConversationHandler.END
+
 # --- Рассылка сообщений ---
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начало рассылки (только для учителей)"""
@@ -201,13 +236,134 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_text("✅ Ваше фото отправлено учителям")
 
-# [Остальные функции (list_command, ask_ai, task_command и т.д.) остаются БЕЗ ИЗМЕНЕНИЙ]
-# ... (вставьте сюда все функции из вашего исходного кода, кроме handle_media) ...
+# --- Команды ИИ ---
+async def ask_ai(prompt: str, context: str = "") -> str:
+    """Функция для взаимодействия с ИИ через OpenRouter"""
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "model": "openai/gpt-3.5-turbo",
+        "messages": [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": f"{context}\n\n{prompt}"}
+        ]
+    }
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers=headers,
+                json=payload
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return data["choices"][0]["message"]["content"]
+                else:
+                    error = await response.text()
+                    logger.error(f"Ошибка API: {error}")
+                    return "⚠️ Произошла ошибка при обработке запроса"
+    except Exception as e:
+        logger.error(f"Ошибка соединения: {e}")
+        return "⚠️ Не удалось соединиться с сервером ИИ"
+
+async def task_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Решение задачи"""
+    if not context.args:
+        await update.message.reply_text("Пожалуйста, укажите задачу после команды /task")
+        return
+    
+    task = " ".join(context.args)
+    await update.message.reply_text("🔍 Решаю задачу...")
+    
+    response = await ask_ai(
+        f"Реши эту задачу по шагам: {task}",
+        "Ты опытный преподаватель. Реши задачу подробно с объяснениями каждого шага."
+    )
+    
+    await update.message.reply_text(f"📚 Решение задачи:\n\n{response}")
+
+async def formula_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Объяснение формулы"""
+    if not context.args:
+        await update.message.reply_text("Пожалуйста, укажите формулу после команды /formula")
+        return
+    
+    formula = " ".join(context.args)
+    await update.message.reply_text("🔍 Объясняю формулу...")
+    
+    response = await ask_ai(
+        f"Объясни эту формулу: {formula}",
+        "Ты опытный преподаватель. Объясни формулу простым языком с примерами."
+    )
+    
+    await update.message.reply_text(f"📖 Объяснение формулы:\n\n{response}")
+
+async def theorem_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Объяснение теоремы"""
+    if not context.args:
+        await update.message.reply_text("Пожалуйста, укажите теорему после команды /theorem")
+        return
+    
+    theorem = " ".join(context.args)
+    await update.message.reply_text("🔍 Объясняю теорему...")
+    
+    response = await ask_ai(
+        f"Объясни эту теорему: {theorem}",
+        "Ты опытный преподаватель. Объясни теорему с доказательством и примерами."
+    )
+    
+    await update.message.reply_text(f"📖 Объяснение теоремы:\n\n{response}")
+
+async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Поиск информации"""
+    if not context.args:
+        await update.message.reply_text("Пожалуйста, укажите запрос после команды /search")
+        return
+    
+    query = " ".join(context.args)
+    await update.message.reply_text("🔍 Ищу информацию...")
+    
+    response = await ask_ai(
+        f"Найди информацию по запросу: {query}",
+        "Ты опытный преподаватель. Дай развернутый ответ на запрос с примерами."
+    )
+    
+    await update.message.reply_text(f"🔎 Результаты поиска:\n\n{response}")
+
+# --- Команда списка пользователей ---
+async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать список пользователей (только для учителей)"""
+    if not await is_owner(update.effective_user.id):
+        await update.message.reply_text("⛔ Доступ только для учителей")
+        return
+    
+    user_data = user_manager.get_all()
+    if not user_data:
+        await update.message.reply_text("❌ Нет зарегистрированных пользователей")
+        return
+    
+    message = ["📝 Список пользователей:"]
+    for user_id, data in user_data.items():
+        message.append(
+            f"👤 {data.get('full_name', 'Неизвестный')} "
+            f"(@{data.get('username', 'нет_username')}) "
+            f"ID: {user_id}"
+        )
+    
+    # Разбиваем сообщение на части, если оно слишком длинное
+    full_message = "\n".join(message)
+    for i in range(0, len(full_message), 4096):
+        await update.message.reply_text(full_message[i:i+4096])
 
 # --- Обновленная help-команда ---
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
         "📚 Доступные команды:\n"
+        "/start - Начать работу с ботом\n"
         "/task - Решить задачу\n"
         "/formula - Объяснить формулу\n"
         "/theorem - Объяснить теорему\n"

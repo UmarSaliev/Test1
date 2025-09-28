@@ -38,7 +38,7 @@ load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
 OWNER_IDS = list(map(int, os.getenv("OWNER_IDS", "").split(","))) if os.getenv("OWNER_IDS") else []
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-BOT_USERNAME = os.getenv("BOT_USERNAME", "@JalilSupportBot")
+BOT_USERNAME = os.getenv("BOT_USERNAME", "@ScienceUp_bot")
 USER_DATA_FILE = "user_data.json"
 BACKUP_FILE = "user_data_backup.json"
 TELEGRAM_PAYMENT_PROVIDER_TOKEN = os.getenv("TELEGRAM_PAYMENT_PROVIDER_TOKEN")  # Optional
